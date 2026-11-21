@@ -14,7 +14,10 @@ function reply(statusCode, data) {
 
 exports.handler = async (event) => {
   if (event.httpMethod !== "GET") {
-    return reply(405, { ok: false, error: "Method not allowed" });
+    return reply(405, {
+      ok: false,
+      error: "Method not allowed"
+    });
   }
 
   const apiKey = process.env.GEMINI_API_KEY;
@@ -37,93 +40,124 @@ exports.handler = async (event) => {
   }
 
   try {
-    const list = await fetch(
+    const listResponse = await fetch(
       `${BASE}/models?key=${encodeURIComponent(apiKey)}&pageSize=100`,
-      { signal: AbortSignal.timeout(12000) }
-    );
-
-    const modelsData = await list.json();
-
-    if (!list.ok) {
-      return reply(502, {
-        ok: false,
-        stage: "listModels",
-        error: modelsData.error?.message || `HTTP ${list.status}`
-      });
-    }
-
-    const available = (modelsData.models || [])
-      .filter(m =>
-        m.supportedGenerationMethods?.includes("generateContent")
-      )
-      .map(m => m.name);
-
-    const preferred = [
-      "models/gemini-2.5-flash-lite",
-      "models/gemini-2.5-flash",
-      "models/gemini-2.0-flash-lite",
-      "models/gemini-2.0-flash"
-    ];
-
-    const selected =
-      preferred.find(name => available.includes(name)) ||
-      available.find(name => /flash/i.test(name));
-
-    if (!selected) {
-      return reply(503, {
-        ok: false,
-        error: "No compatible Flash model available"
-      });
-    }
-
-    const response = await fetch(
-      `${BASE}/${selected}:generateContent?key=${encodeURIComponent(apiKey)}`,
       {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        signal: AbortSignal.timeout(25000),
-        body: JSON.stringify({
-          contents: [{
-            parts: [{
-              text: "כתוב משפט אחד בעברית על עובדה מדעית ידועה."
-            }]
-          }],
-          generationConfig: {
-            maxOutputTokens: 180
-          }
-        })
+        signal: AbortSignal.timeout(12000)
       }
     );
 
-    const data = await response.json();
+    const listData = await listResponse.json();
 
-    if (!response.ok) {
+    if (!listResponse.ok) {
       return reply(502, {
         ok: false,
-        model: selected,
-        error: data.error?.message || `HTTP ${response.status}`
+        stage: "listModels",
+        error: listData.error?.message || `HTTP ${listResponse.status}`
       });
     }
 
-    const text = (data.candidates?.[0]?.content?.parts || [])
-      .map(part => part.text || "")
-      .join("")
-      .trim();
+    const available = (listData.models || [])
+      .filter(model =>
+        model.supportedGenerationMethods?.includes("generateContent")
+      )
+      .map(model => model.name);
 
-    if (!text) {
-      return reply(502, {
+    const preferred = [
+      "models/gemini-3.5-flash-lite",
+      "models/gemini-3-flash",
+      "models/gemini-2.5-flash",
+      "models/gemini-2.5-flash-lite",
+      "models/gemini-2.0-flash"
+    ];
+
+    const candidates = [
+      ...preferred.filter(name => available.includes(name)),
+      ...available.filter(name => /flash/i.test(name))
+    ].filter((name, index, array) => array.indexOf(name) === index);
+
+    if (!candidates.length) {
+      return reply(503, {
         ok: false,
-        model: selected,
-        error: "No text returned"
+        error: "No compatible Flash models available"
       });
     }
 
-    return reply(200, {
-      ok: true,
-      model: selected,
-      text
+    const errors = [];
+
+    for (const model of candidates.slice(0, 5)) {
+      try {
+        const response = await fetch(
+          `${BASE}/${model}:generateContent`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-goog-api-key": apiKey
+            },
+            signal: AbortSignal.timeout(20000),
+            body: JSON.stringify({
+              contents: [{
+                parts: [{
+                  text: "כתוב משפט אחד בעברית על עובדה מדעית ידועה."
+                }]
+              }],
+              generationConfig: {
+                maxOutputTokens: 300
+              }
+            })
+          }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          errors.push({
+            model,
+            status: response.status,
+            error: data.error?.message || "Request failed"
+          });
+
+          if ([400, 403, 429].includes(response.status)) {
+            break;
+          }
+
+          continue;
+        }
+
+        const text = (data.candidates?.[0]?.content?.parts || [])
+          .map(part => part.text || "")
+          .join("")
+          .trim();
+
+        if (!text) {
+          errors.push({
+            model,
+            error: "No text returned"
+          });
+          continue;
+        }
+
+        return reply(200, {
+          ok: true,
+          model,
+          text
+        });
+
+      } catch (error) {
+        errors.push({
+          model,
+          error: error?.name === "TimeoutError"
+            ? "Request timed out"
+            : "Connection failed"
+        });
+      }
+    }
+
+    return reply(502, {
+      ok: false,
+      error: "All tested models failed",
+      attempts: errors
     });
 
   } catch (error) {
