@@ -1,4 +1,3 @@
-
 "use strict";
 
 const { verifyArticle } = require("./verify-article");
