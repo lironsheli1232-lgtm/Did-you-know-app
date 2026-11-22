@@ -1,6 +1,5 @@
 
 "use strict";
-in
 // AI-assisted review. Never automatically approves publication.
 const BASE = "https://generativelanguage.googleapis.com/v1beta";
 
