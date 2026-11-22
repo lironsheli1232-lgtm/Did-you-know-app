@@ -1,0 +1,82 @@
+
+name: DID YOU KNOW - Code Tests
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Check application code
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Download repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Check JavaScript syntax
+        run: |
+          node --check netlify/functions/generate-articles.js
+          node --check netlify/functions/verify-article.js
+          node --check netlify/functions/verify-sources.js
+
+      - name: Check modules and quality rules
+        run: |
+          node <<'NODE'
+          const assert = require("node:assert/strict");
+
+          const { verifyArticle } =
+            require("./netlify/functions/verify-article");
+
+          const { verifySources } =
+            require("./netlify/functions/verify-sources");
+
+          const { handler } =
+            require("./netlify/functions/generate-articles");
+
+          assert.equal(typeof handler, "function");
+          assert.equal(typeof verifyArticle, "function");
+          assert.equal(typeof verifySources, "function");
+
+          const invalid = verifyArticle(null);
+          assert.equal(invalid.passed, false);
+          assert.equal(invalid.publicationApproved, false);
+
+          const short = verifyArticle({
+            title: "בדיקה",
+            teaser: "בדיקת מערכת",
+            category: "מדע",
+            body: "כתבה קצרה",
+            sources: [
+              { name: "NASA", url: "https://www.nasa.gov/" },
+              { name: "Nobel", url: "https://www.nobelprize.org/" }
+            ]
+          });
+
+          assert.equal(short.passed, false);
+
+          const result = verifyArticle({
+            title: "בדיקה",
+            teaser: "בדיקת שפה",
+            category: "מדע",
+            body: ("מילה ".repeat(400)) + "مرحبا",
+            sources: [
+              { name: "NASA", url: "https://www.nasa.gov/" },
+              { name: "Nobel", url: "https://www.nobelprize.org/" }
+            ]
+          });
+
+          assert.equal(result.passed, false);
+
+          console.log("All code checks passed.");
+          NODE
