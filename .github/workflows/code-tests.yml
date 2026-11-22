@@ -26,75 +26,149 @@ jobs:
 
       - name: Check JavaScript syntax
         run: |
-          node --check netlify/functions/generate-articles.js
-          node --check netlify/functions/verify-article.js
-          node --check netlify/functions/verify-sources.js
-          node --check netlify/functions/fact-check.js
+          for file in netlify/functions/*.js; do
+            node --check "$file"
+          done
 
-      - name: Check modules and quality rules
+      - name: Run offline integration checks
+        env:
+          GEMINI_API_KEY: local-test-key
+          GEMINI_TEST_SECRET: local-test-secret
         run: |
           node <<'NODE'
           const assert = require("node:assert/strict");
 
+          const { handler } =
+            require("./netlify/functions/generate-articles");
           const { verifyArticle } =
             require("./netlify/functions/verify-article");
-
           const { verifySources } =
             require("./netlify/functions/verify-sources");
-
           const { factCheck } =
             require("./netlify/functions/fact-check");
 
-          const { handler } =
-            require("./netlify/functions/generate-articles");
-
-          assert.equal(typeof handler, "function");
-          assert.equal(typeof verifyArticle, "function");
-          assert.equal(typeof verifySources, "function");
-          assert.equal(typeof factCheck, "function");
-
-          const invalid = verifyArticle(null);
-          assert.equal(invalid.passed, false);
-          assert.equal(invalid.publicationApproved, false);
-
-          const short = verifyArticle({
-            title: "בדיקה",
-            teaser: "בדיקת מערכת",
-            category: "מדע",
-            body: "כתבה קצרה",
-            sources: [
-              { name: "NASA", url: "https://www.nasa.gov/" },
-              { name: "Nobel", url: "https://www.nobelprize.org/" }
-            ]
-          });
-
-          assert.equal(short.passed, false);
-
-          const arabic = verifyArticle({
-            title: "בדיקה",
-            teaser: "בדיקת שפה",
-            category: "מדע",
-            body: ("מילה ".repeat(400)) + "مرحبا",
-            sources: [
-              { name: "NASA", url: "https://www.nasa.gov/" },
-              { name: "Nobel", url: "https://www.nobelprize.org/" }
-            ]
-          });
-
-          assert.equal(arabic.passed, false);
-
           async function main() {
+            assert.equal(typeof handler, "function");
+            assert.equal(typeof verifyArticle, "function");
+            assert.equal(typeof verifySources, "function");
+            assert.equal(typeof factCheck, "function");
+
+            assert.equal(verifyArticle(null).passed, false);
+
+            assert.equal(verifyArticle({
+              title: "בדיקה",
+              teaser: "בדיקה",
+              category: "מדע",
+              body: "קצר מדי",
+              sources: []
+            }).passed, false);
+
+            let calls = 0;
+            const originalFetch = global.fetch;
+
+            global.fetch = async url => {
+              calls++;
+
+              if (String(url).includes("/models?")) {
+                return {
+                  ok: true,
+                  json: async () => ({
+                    models: [{
+                      name: "models/gemini-3.5-flash-lite",
+                      supportedGenerationMethods: [
+                        "generateContent"
+                      ]
+                    }]
+                  })
+                };
+              }
+
+              if (String(url).includes(":generateContent")) {
+                return {
+                  ok: true,
+                  json: async () => ({
+                    candidates: [{
+                      content: {
+                        parts: [{
+                          text: JSON.stringify({
+                            title: "כתבת בדיקה",
+                            teaser: "טקסט לבדיקה",
+                            category: "מדע",
+                            body: "קצר מדי",
+                            sources: []
+                          })
+                        }]
+                      }
+                    }]
+                  })
+                };
+              }
+
+              throw new Error(
+                "Unexpected external request: " + url
+              );
+            };
+
+            try {
+              const denied = await handler({
+                httpMethod: "GET",
+                queryStringParameters: {
+                  code: "wrong"
+                }
+              });
+
+              assert.equal(denied.statusCode, 403);
+              assert.equal(calls, 0);
+
+              const method = await handler({
+                httpMethod: "POST"
+              });
+
+              assert.equal(method.statusCode, 405);
+              assert.equal(calls, 0);
+
+              const generated = await handler({
+                httpMethod: "GET",
+                queryStringParameters: {
+                  code: "local-test-secret"
+                }
+              });
+
+              assert.equal(generated.statusCode, 200);
+
+              const result = JSON.parse(generated.body);
+
+              assert.equal(result.quality.passed, false);
+              assert.equal(result.published, false);
+              assert.equal(
+                result.verification,
+                "QUALITY_FAILED"
+              );
+              assert.equal(calls, 2);
+
+            } finally {
+              global.fetch = originalFetch;
+            }
+
             const review = await factCheck(
-              { body: "כתבה לדוגמה" },
+              { body: "טקסט לבדיקה" },
               { sources: [] },
-              "test-key"
+              "local-test-key"
             );
 
-            assert.equal(review.publicationApproved, false);
+            assert.equal(
+              review.publicationApproved,
+              false
+            );
             assert.equal(review.factChecked, false);
-            assert.equal(review.status, "NEEDS_FACT_CHECK");
+            assert.equal(
+              review.status,
+              "NEEDS_FACT_CHECK"
+            );
 
-            console.log("All code checks passed.");
+            console.log(
+              "Offline integration checks passed"
+            );
           }
 
           main().catch(error => {
