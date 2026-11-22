@@ -116,4 +116,284 @@ if(API_BASE){fetch(API_BASE.replace(/\/$/,"")+"/health").catch(()=>{});}
 
 </script>
 <script>if("serviceWorker" in navigator){navigator.serviceWorker.getRegistrations().then(rs=>rs.forEach(r=>r.unregister())).catch(()=>{});}</script>
+
+<style>
+.interest-screen{
+  position:absolute;
+  inset:0;
+  z-index:30;
+  background:#fff4e5;
+  display:none;
+  flex-direction:column;
+  overflow-y:auto;
+  padding:22px;
+  padding-top:max(30px,env(safe-area-inset-top));
+}
+.interest-screen.visible{display:flex}
+.interest-inner{width:100%;max-width:520px;margin:auto}
+.interest-heading{
+  background:linear-gradient(135deg,#ff8a24,#f36b16);
+  color:white;
+  padding:27px 23px;
+  border-radius:24px;
+  margin-bottom:22px;
+}
+.interest-heading h1{font-size:32px;margin:8px 0}
+.interest-heading p{line-height:1.6;margin-bottom:0}
+.interest-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:11px;
+}
+.interest-choice{
+  min-height:66px;
+  padding:12px;
+  border-radius:16px;
+  border:2px solid #f1d1ae;
+  background:#fffaf2;
+  font-weight:700;
+  text-align:center;
+}
+.interest-choice.chosen{
+  border-color:#ed6e17;
+  background:#ffe1bb;
+  color:#8e3500;
+}
+.interest-finish{
+  width:100%;
+  background:#f58225;
+  color:#381d0b;
+  font-weight:850;
+  border-radius:17px;
+  padding:17px;
+  margin-top:22px;
+}
+.interest-finish:disabled{opacity:.45}
+.interest-note{
+  color:#806a58;
+  text-align:center;
+  font-size:13px;
+  line-height:1.6;
+  margin-top:14px;
+}
+</style>
+
+<script>
+(function(){
+  "use strict";
+
+  const KEY = "dyk_interests_v1";
+  const SCORES_KEY = "dyk_interest_scores_v1";
+
+  const topics = [
+    "ספורט",
+    "מדע וחלל",
+    "היסטוריה",
+    "פסיכולוגיה",
+    "פילוסופיה",
+    "טבע ובעלי חיים",
+    "טכנולוגיה",
+    "תרבות ואמנות",
+    "גוף האדם",
+    "תעלומות"
+  ];
+
+  const categoryMap = {
+    "כדורגל":"ספורט",
+    "ספורט":"ספורט",
+    "חלל":"מדע וחלל",
+    "מדע":"מדע וחלל",
+    "היסטוריה":"היסטוריה",
+    "פסיכולוגיה":"פסיכולוגיה",
+    "פילוסופיה":"פילוסופיה",
+    "בעלי חיים":"טבע ובעלי חיים",
+    "ים וטבע":"טבע ובעלי חיים",
+    "טבע":"טבע ובעלי חיים",
+    "אוקיינוסים":"טבע ובעלי חיים",
+    "גאוגרפיה":"טבע ובעלי חיים",
+    "המצאות":"טכנולוגיה",
+    "גוף האדם":"גוף האדם"
+  };
+
+  function read(key,fallback){
+    try{
+      const value=JSON.parse(localStorage.getItem(key));
+      return value ?? fallback;
+    }catch(e){
+      return fallback;
+    }
+  }
+
+  function write(key,value){
+    try{
+      localStorage.setItem(key,JSON.stringify(value));
+    }catch(e){}
+  }
+
+  function getPreferences(){
+    const value=read(KEY,null);
+    return Array.isArray(value)
+      ? value.filter(t=>topics.includes(t))
+      : null;
+  }
+
+  function categoryOf(story){
+    return categoryMap[story.category] || "תעלומות";
+  }
+
+  function personalScore(story,preferences,scores){
+    const category=categoryOf(story);
+    return (preferences.includes(category)?10:0)
+      + Math.min(5,Math.max(-5,Number(scores[category])||0));
+  }
+
+  function personalize(){
+    const preferences=getPreferences();
+    if(!preferences || !preferences.length)return;
+
+    const scores=read(SCORES_KEY,{});
+    const original=[...edition];
+
+    const preferred=original
+      .filter(s=>preferences.includes(categoryOf(s)))
+      .sort((a,b)=>
+        personalScore(b,preferences,scores)
+        -personalScore(a,preferences,scores)
+      );
+
+    const discoveries=original
+      .filter(s=>!preferences.includes(categoryOf(s)))
+      .sort((a,b)=>
+        personalScore(b,preferences,scores)
+        -personalScore(a,preferences,scores)
+      );
+
+    const first=[
+      ...preferred.slice(0,3),
+      ...discoveries.slice(0,2)
+    ];
+
+    const used=new Set(first.map(s=>s.id));
+    const remaining=original
+      .filter(s=>!used.has(s.id))
+      .sort((a,b)=>
+        personalScore(b,preferences,scores)
+        -personalScore(a,preferences,scores)
+      );
+
+    edition=[...first,...remaining];
+    renderFeed();
+    document.querySelector("#feed").scrollTop=0;
+  }
+
+  const screen=document.createElement("section");
+  screen.className="interest-screen";
+  screen.setAttribute("aria-label","בחירת תחומי עניין");
+
+  const inner=document.createElement("div");
+  inner.className="interest-inner";
+  screen.appendChild(inner);
+
+  const heading=document.createElement("div");
+  heading.className="interest-heading";
+
+  const brand=document.createElement("strong");
+  brand.textContent="DID YOU KNOW?";
+
+  const title=document.createElement("h1");
+  title.textContent="מה מסקרן אותך?";
+
+  const description=document.createElement("p");
+  description.textContent=
+    "בחר לפחות נושא אחד. אנחנו נדאג גם להפתיע אותך עם דברים חדשים.";
+
+  heading.append(brand,title,description);
+
+  const grid=document.createElement("div");
+  grid.className="interest-grid";
+
+  const finish=document.createElement("button");
+  finish.className="interest-finish";
+  finish.textContent="מתחילים לגלות";
+
+  const note=document.createElement("p");
+  note.className="interest-note";
+  note.textContent=
+    "אפשר לשנות את הבחירה בכל רגע. ההעדפות נשמרות במכשיר הזה.";
+
+  inner.append(heading,grid,finish,note);
+  document.querySelector(".app").appendChild(screen);
+
+  let selected=new Set();
+
+  function updateChoices(){
+    grid.querySelectorAll("button").forEach(button=>{
+      const chosen=selected.has(button.dataset.topic);
+      button.classList.toggle("chosen",chosen);
+      button.setAttribute("aria-pressed",String(chosen));
+    });
+    finish.disabled=selected.size===0;
+  }
+
+  topics.forEach(topic=>{
+    const button=document.createElement("button");
+    button.className="interest-choice";
+    button.dataset.topic=topic;
+    button.textContent=topic;
+
+    button.addEventListener("click",()=>{
+      if(selected.has(topic)){
+        selected.delete(topic);
+      }else{
+        selected.add(topic);
+      }
+      updateChoices();
+    });
+
+    grid.appendChild(button);
+  });
+
+  function openPreferences(){
+    selected=new Set(getPreferences()||[]);
+    updateChoices();
+    screen.classList.add("visible");
+  }
+
+  finish.addEventListener("click",()=>{
+    if(!selected.size)return;
+    write(KEY,[...selected]);
+    screen.classList.remove("visible");
+    personalize();
+  });
+
+  const settings=document.createElement("button");
+  settings.className="iconbtn";
+  settings.textContent="תחומי עניין";
+  settings.setAttribute("aria-label","שינוי תחומי עניין");
+  settings.addEventListener("click",openPreferences);
+  document.querySelector(".top-actions").prepend(settings);
+
+  document.addEventListener("click",event=>{
+    const open=event.target.closest("[data-open]");
+    if(!open)return;
+
+    const story=findStory(open.dataset.open);
+    if(!story)return;
+
+    const scores=read(SCORES_KEY,{});
+    const category=categoryOf(story);
+    scores[category]=Math.min(
+      5,(Number(scores[category])||0)+1
+    );
+    write(SCORES_KEY,scores);
+  },true);
+
+  if(getPreferences()===null || !getPreferences().length){
+    openPreferences();
+  }else{
+    personalize();
+  }
+})();
+</script>
+
 </body></html>
