@@ -29,6 +29,7 @@ jobs:
           node --check netlify/functions/generate-articles.js
           node --check netlify/functions/verify-article.js
           node --check netlify/functions/verify-sources.js
+          node --check netlify/functions/fact-check.js
 
       - name: Check modules and quality rules
         run: |
@@ -41,12 +42,16 @@ jobs:
           const { verifySources } =
             require("./netlify/functions/verify-sources");
 
+          const { factCheck } =
+            require("./netlify/functions/fact-check");
+
           const { handler } =
             require("./netlify/functions/generate-articles");
 
           assert.equal(typeof handler, "function");
           assert.equal(typeof verifyArticle, "function");
           assert.equal(typeof verifySources, "function");
+          assert.equal(typeof factCheck, "function");
 
           const invalid = verifyArticle(null);
           assert.equal(invalid.passed, false);
@@ -65,7 +70,7 @@ jobs:
 
           assert.equal(short.passed, false);
 
-          const result = verifyArticle({
+          const arabic = verifyArticle({
             title: "בדיקה",
             teaser: "בדיקת שפה",
             category: "מדע",
@@ -76,7 +81,24 @@ jobs:
             ]
           });
 
-          assert.equal(result.passed, false);
+          assert.equal(arabic.passed, false);
 
-          console.log("All code checks passed.");
+          async function main() {
+            const review = await factCheck(
+              { body: "כתבה לדוגמה" },
+              { sources: [] },
+              "test-key"
+            );
+
+            assert.equal(review.publicationApproved, false);
+            assert.equal(review.factChecked, false);
+            assert.equal(review.status, "NEEDS_FACT_CHECK");
+
+            console.log("All code checks passed.");
+          }
+
+          main().catch(error => {
+            console.error(error);
+            process.exitCode = 1;
+          });
           NODE
