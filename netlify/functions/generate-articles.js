@@ -1,13 +1,11 @@
 
-const BASE = "https://generativelanguage.googleapis.com/v1beta";
+"use strict";
 
-const TOPICS = [
-  "מדע",
-  "היסטוריה",
-  "ספורט",
-  "פילוסופיה",
-  "טבע"
-];
+const { verifyArticle } = require("./verify-article");
+const { verifySources } = require("./verify-sources");
+
+const BASE = "https://generativelanguage.googleapis.com/v1beta";
+const TOPICS = ["מדע", "היסטוריה", "ספורט", "פילוסופיה", "טבע"];
 
 function reply(statusCode, data) {
   return {
@@ -20,145 +18,53 @@ function reply(statusCode, data) {
   };
 }
 
-function validUrl(value) {
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && Boolean(url.hostname);
-  } catch {
-    return false;
-  }
-}
-
-function validateArticle(article) {
-  if (!article || typeof article !== "object" || Array.isArray(article)) {
-    return "Invalid article object";
-  }
-
-  for (const key of ["title", "teaser", "body", "category"]) {
-    if (typeof article[key] !== "string" || !article[key].trim()) {
-      return `Missing ${key}`;
-    }
-  }
-
-  if (!Array.isArray(article.sources) || article.sources.length < 2) {
-    return "At least two sources required";
-  }
-
-  const sourcesValid = article.sources.every(source =>
-    source &&
-    typeof source.name === "string" &&
-    source.name.trim() &&
-    typeof source.url === "string" &&
-    validUrl(source.url)
-  );
-
-  if (!sourcesValid) {
-    return "Invalid source format";
-  }
-
-  const words = article.body.trim().split(/\s+/).filter(Boolean).length;
-
-  if (words < 300 || words > 850) {
-    return `Article length out of range: ${words} words`;
-  }
-
-  return null;
-}
-
 async function generate(apiKey, model, topic) {
-  const prompt = `
-כתוב כתבה אחת בעברית לאפליקציית DID YOU KNOW.
+  const prompt = `כתוב כתבה אחת בעברית לאפליקציית DID YOU KNOW בנושא ${topic}.
+בחר סיפור אמיתי ומסקרן. כותרת מדויקת, פתיח קצר וגוף באורך 400 עד 650 מילים בעברית תקינה בלבד.
+אל תשתמש באותיות בערבית. אל תמציא עובדות, ציטוטים או כתובות אינטרנט.
+צרף 2 עד 4 מקורות אמינים ועצמאיים עם כתובות HTTPS אמיתיות וספציפיות.
+החזר JSON בלבד במבנה: {"title":"...","teaser":"...","category":"${topic}","body":"...","sources":[{"name":"...","url":"https://..."}]}`;
 
-נושא: ${topic}
-
-דרישות:
-- בחר סיפור אמיתי, מפתיע ומסקרן.
-- כתוב כותרת מעניינת ומדויקת.
-- כתוב פתיח קצר שמעורר סקרנות.
-- כתוב גוף כתבה באורך 400 עד 700 מילים.
-- השתמש בעברית טבעית וברורה.
-- אל תמציא עובדות, מחקרים, ציטוטים או תאריכים.
-- אם אינך בטוח בעובדה, אל תציג אותה כוודאית.
-- הצע 2 עד 4 מקורות עצמאיים ואמינים.
-- אל תמציא כתובות אינטרנט.
-- החזר JSON תקין בלבד.
-
-מבנה התשובה:
-{
-  "title": "כותרת",
-  "teaser": "פתיח קצר",
-  "category": "${topic}",
-  "body": "גוף הכתבה",
-  "sources": [
-    {
-      "name": "שם המקור",
-      "url": "https://example.org/article"
-    }
-  ]
-}
-`;
-
-  const response = await fetch(
-    `${BASE}/${model}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey
-      },
-      signal: AbortSignal.timeout(23000),
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [{ text: prompt }]
-          }
-        ],
-        generationConfig: {
-          temperature: 0.5,
-          maxOutputTokens: 3500,
-          responseMimeType: "application/json"
-        }
-      })
-    }
-  );
+  const response = await fetch(`${BASE}/${model}:generateContent`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": apiKey
+    },
+    signal: AbortSignal.timeout(23000),
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.5,
+        maxOutputTokens: 3500,
+        responseMimeType: "application/json"
+      }
+    })
+  });
 
   const data = await response.json();
 
   if (!response.ok) {
     throw new Error(
-      `Gemini HTTP ${response.status}: ${
-        data.error?.message || "Request failed"
-      }`
+      `Gemini HTTP ${response.status}: ${data.error?.message || "Request failed"}`
     );
   }
 
-  const text = (data.candidates?.[0]?.content?.parts || [])
-    .map(part => part.text || "")
+  const raw = (data.candidates?.[0]?.content?.parts || [])
+    .map(p => p.text || "")
     .join("")
     .trim();
 
-  if (!text) {
-    throw new Error("Gemini returned no text");
-  }
-
-  let article;
+  if (!raw) throw new Error("Gemini returned no text");
 
   try {
-    article = JSON.parse(text);
+    return JSON.parse(raw);
   } catch {
     throw new Error("Gemini returned invalid JSON");
   }
-
-  const issue = validateArticle(article);
-
-  if (issue) {
-    throw new Error(issue);
-  }
-
-  return article;
 }
 
-exports.handler = async (event) => {
+exports.handler = async event => {
   if (event.httpMethod !== "GET") {
     return reply(405, {
       ok: false,
@@ -176,9 +82,7 @@ exports.handler = async (event) => {
     });
   }
 
-  const supplied = event.queryStringParameters?.code || "";
-
-  if (supplied !== secret) {
+  if ((event.queryStringParameters?.code || "") !== secret) {
     return reply(403, {
       ok: false,
       error: "Forbidden"
@@ -186,7 +90,7 @@ exports.handler = async (event) => {
   }
 
   try {
-    const listResponse = await fetch(
+    const response = await fetch(
       `${BASE}/models?pageSize=100`,
       {
         headers: {
@@ -196,20 +100,21 @@ exports.handler = async (event) => {
       }
     );
 
-    const listData = await listResponse.json();
+    const data = await response.json();
 
-    if (!listResponse.ok) {
+    if (!response.ok) {
       return reply(502, {
         ok: false,
-        error: `Model listing failed (HTTP ${listResponse.status})`
+        error: `Model listing failed (HTTP ${response.status})`,
+        published: false
       });
     }
 
-    const available = (listData.models || [])
-      .filter(model =>
-        model.supportedGenerationMethods?.includes("generateContent")
+    const available = (data.models || [])
+      .filter(m =>
+        m.supportedGenerationMethods?.includes("generateContent")
       )
-      .map(model => model.name);
+      .map(m => m.name);
 
     const preferred = [
       "models/gemini-3.5-flash-lite",
@@ -220,40 +125,61 @@ exports.handler = async (event) => {
 
     const models = [
       ...new Set([
-        ...preferred.filter(model => available.includes(model)),
-        ...available.filter(model => /flash/i.test(model))
+        ...preferred.filter(m => available.includes(m)),
+        ...available.filter(m => /flash/i.test(m))
       ])
     ];
 
     if (!models.length) {
       return reply(503, {
         ok: false,
-        error: "No Flash model available"
+        error: "No Flash model available",
+        published: false
       });
     }
 
-    let lastError = "Unknown error";
+    let lastError = "Generation failed";
 
     for (const model of models.slice(0, 3)) {
+      let article;
+
       try {
-        const article = await generate(apiKey, model, TOPICS[0]);
-
-        return reply(200, {
-          ok: true,
-          model,
-          article,
-          verification: "STRUCTURE_ONLY",
-          published: false,
-          note: "Facts and source links are not independently verified."
-        });
-
+        article = await generate(apiKey, model, TOPICS[0]);
       } catch (error) {
-        lastError = error.message || "Generation failed";
+        lastError = error.message || lastError;
 
         if (/HTTP (400|401|403|429)/.test(lastError)) {
           break;
         }
+
+        continue;
       }
+
+      const quality = verifyArticle(article);
+
+      if (!quality.passed) {
+        return reply(200, {
+          ok: true,
+          model,
+          article,
+          quality,
+          sourceReview: null,
+          verification: "QUALITY_FAILED",
+          published: false
+        });
+      }
+
+      const sourceReview = await verifySources(article);
+
+      return reply(200, {
+        ok: true,
+        model,
+        article,
+        quality,
+        sourceReview,
+        verification: "NEEDS_FACT_CHECK",
+        published: false
+      });
     }
 
     return reply(502, {
@@ -261,13 +187,13 @@ exports.handler = async (event) => {
       error: lastError,
       published: false
     });
-
   } catch (error) {
     return reply(502, {
       ok: false,
-      error: error?.name === "TimeoutError"
-        ? "Request timed out"
-        : "Connection failed",
+      error:
+        error?.name === "TimeoutError"
+          ? "Request timed out"
+          : "Generation or verification failed",
       published: false
     });
   }
