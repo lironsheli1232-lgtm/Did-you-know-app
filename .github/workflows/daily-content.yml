@@ -3,9 +3,14 @@ name: DID YOU KNOW - Daily Content
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/daily-content.yml'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: daily-content
@@ -13,7 +18,9 @@ concurrency:
 
 jobs:
   generate:
+    name: Generate daily articles
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
@@ -24,6 +31,16 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Check API key
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "GEMINI_API_KEY is missing"
+            exit 1
+          fi
+          echo "API key is configured"
+
       - name: Generate articles
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -31,7 +48,7 @@ jobs:
           DAILY_ARTICLE_COUNT: '5'
         run: node scripts/generate-content.mjs
 
-      - name: Show generation summary
+      - name: Check generated database
         run: |
           node --input-type=module -e '
           import fs from "node:fs";
@@ -39,9 +56,10 @@ jobs:
           console.log("Database version:", db.version);
           console.log("Updated:", db.updatedAt);
           console.log("Total articles:", db.articles.length);
+          if (!db.articles.length) process.exit(1);
           '
 
-      - name: Upload generated database for review
+      - name: Upload generated articles
         uses: actions/upload-artifact@v4
         with:
           name: generated-articles
