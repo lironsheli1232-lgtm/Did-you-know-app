@@ -1,0 +1,49 @@
+
+name: DID YOU KNOW - Daily Content
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-content
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Generate articles
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-2.5-flash
+          DAILY_ARTICLE_COUNT: '5'
+        run: node scripts/generate-content.mjs
+
+      - name: Show generation summary
+        run: |
+          node --input-type=module -e '
+          import fs from "node:fs";
+          const db = JSON.parse(fs.readFileSync("content/articles.json", "utf8"));
+          console.log("Database version:", db.version);
+          console.log("Updated:", db.updatedAt);
+          console.log("Total articles:", db.articles.length);
+          '
+
+      - name: Upload generated database for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-articles
+          path: content/articles.json
+          retention-days: 7
