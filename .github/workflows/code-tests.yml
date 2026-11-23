@@ -29,6 +29,11 @@ jobs:
           for file in netlify/functions/*.js; do
             node --check "$file"
           done
+          node --check personalization.js
+          node --check tests/personalization.test.js
+
+      - name: Run personalization tests
+        run: node --test tests/personalization.test.js
 
       - name: Run offline integration checks
         env:
