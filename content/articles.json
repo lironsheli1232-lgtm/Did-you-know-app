@@ -1,0 +1,25 @@
+
+{
+  "version": 1,
+  "updatedAt": null,
+  "articles": [],
+  "settings": {
+    "dailyArticleCount": 5,
+    "personalizedArticleCount": 3,
+    "discoveryArticleCount": 2,
+    "allowPreviouslyReadArticles": false,
+    "carryOverUnreadArticles": true
+  },
+  "categories": [
+    "ספורט",
+    "מדע וחלל",
+    "היסטוריה",
+    "פסיכולוגיה",
+    "פילוסופיה",
+    "טבע ובעלי חיים",
+    "טכנולוגיה",
+    "תרבות ואמנות",
+    "גוף האדם",
+    "תעלומות"
+  ]
+}
