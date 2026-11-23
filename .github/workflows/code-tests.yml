@@ -32,8 +32,13 @@ jobs:
           node --check personalization.js
           node --check tests/personalization.test.js
 
-      - name: Run personalization tests
-        run: node --test tests/personalization.test.js
+    
+      - name: Run personalization and content loader tests
+        run: |
+          node --check content-loader.js
+          node --check tests/content-loader.test.js
+          node --test tests/personalization.test.js tests/content-loader.test.js
+
 
       - name: Run offline integration checks
         env:
