@@ -98,14 +98,13 @@ function buildEdition(){
   const archive=read("dyk_archive",{});
   const existing=Array.isArray(archive[day])?archive[day].filter(s=>s&&s.id&&s.title):[];
   const existingShared=existing.length===5&&existing.some(s=>s.isDemo===false);
-  // A published shared edition is frozen for the entire day.
+  const preferences=read("dyk_interests_v1",[]);
+  let next=[];
+  sourceIsDemo=true;
   if(existingShared){
     edition=existing;
     sourceIsDemo=false;
   }else{
-    const preferences=read("dyk_interests_v1",[]);
-    let next=[];
-    sourceIsDemo=true;
     if(shared.length&&window.DYKContentLoader&&window.DYKPersonalization){
       try{
         const result=window.DYKContentLoader.prepareDailyFeed({
@@ -119,15 +118,13 @@ function buildEdition(){
         }
       }catch(e){console.warn("Personalized shared feed unavailable",e)}
     }
-    // The demo is only a fallback, never a replacement for a published edition.
     if(sourceIsDemo){
-      next=existing.length?existing:personalizeDemo(preferences);
+      // Reorder the demo on every preference change, rather than reusing today's archived order.
+      next=personalizeDemo(preferences);
     }
     edition=next;
-    if(!existingShared){
-      archive[day]=edition.map(s=>({...s}));
-      write("dyk_archive",archive);
-    }
+    archive[day]=edition.map(s=>({...s}));
+    write("dyk_archive",archive);
   }
   renderFeed();
   $("#feed").scrollTop=0;
