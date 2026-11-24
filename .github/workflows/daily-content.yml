@@ -8,6 +8,7 @@ on:
       - main
     paths:
       - '.github/workflows/daily-content.yml'
+      - 'scripts/generate-content.mjs'
 
 permissions:
   contents: read
@@ -36,10 +37,13 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           if [ -z "$GEMINI_API_KEY" ]; then
-            echo "GEMINI_API_KEY is missing"
+            echo "Missing API key"
             exit 1
           fi
           echo "API key is configured"
+
+      - name: Check generator file
+        run: test -f scripts/generate-content.mjs
 
       - name: Generate articles
         env:
@@ -53,10 +57,8 @@ jobs:
           node --input-type=module -e '
           import fs from "node:fs";
           const db = JSON.parse(fs.readFileSync("content/articles.json", "utf8"));
-          console.log("Database version:", db.version);
-          console.log("Updated:", db.updatedAt);
           console.log("Total articles:", db.articles.length);
-          if (!db.articles.length) process.exit(1);
+          if (db.articles.length < 5) process.exit(1);
           '
 
       - name: Upload generated articles
