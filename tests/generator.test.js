@@ -1,0 +1,2 @@
+const {test}=require('node:test');const assert=require('node:assert/strict');
+test('rejects short and long articles',async()=>{const {validate}=await import('../scripts/generate-content.mjs');const article=n=>({title:'כותרת',teaser:'תקציר',body:Array.from({length:5},()=>Array(n/5).fill('מילה').join(' '))});assert.ok(validate(article(350)).length);assert.equal(validate(article(650)).length,0);assert.equal(validate(article(800)).length,0);assert.ok(validate(article(805)).length)});
