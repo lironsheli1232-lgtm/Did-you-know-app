@@ -1,102 +1,55 @@
 name: DID YOU KNOW - Daily Content
-
 on:
   workflow_dispatch:
   schedule:
     - cron: '15 3 * * *'
-
 permissions:
   contents: write
   pages: write
   id-token: write
-
 concurrency:
   group: dyk-pages
   cancel-in-progress: false
-
 jobs:
   generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-
       - name: Tests
         run: node --test tests/*.test.js
-
-      - name: Generate articles with fallback
+      - name: Generate articles
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           DAILY_ARTICLE_COUNT: '5'
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          log=$(mktemp)
-          trap 'rm -f "$log"' EXIT
-
-          for model in gemini-3.5-flash-lite gemini-flash-lite-latest; do
-            for attempt in 1 2 3; do
-              echo "Model: $model | Attempt: $attempt"
-
-              if GEMINI_MODEL="$model" node scripts/generate-content.mjs >"$log" 2>&1; then
-                cat "$log"
-                exit 0
-              fi
-
-              cat "$log"
-
-              if ! grep -Eqi 'API error: (503|502|504)|UNAVAILABLE' "$log"; then
-                exit 1
-              fi
-
-              if [ "$attempt" -lt 3 ]; then
-                sleep "$((attempt * 30))"
-              fi
-            done
-          done
-
-          exit 1
-
+        run: node scripts/generate-content.mjs
       - name: Save archive
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add content/articles.json
-
           if ! git diff --cached --quiet; then
             git commit -m 'Publish daily articles'
             git push
           fi
-
       - name: Prepare public site
         run: |
           mkdir -p public/content
           cp index.html icon.svg personalization.js content-loader.js public/
-          cp content/articles.json public/content/
-
+          node -e 'const fs=require("fs");const d=JSON.parse(fs.readFileSync("content/articles.json"));delete d.reserve;fs.writeFileSync("public/content/articles.json",JSON.stringify(d));'
       - uses: actions/upload-pages-artifact@v3
         with:
           path: public
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: generated-articles
-          path: content/articles.json
-
   deploy:
     needs: generate
     runs-on: ubuntu-latest
-
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-
     steps:
       - name: Deploy
         id: deployment
