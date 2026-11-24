@@ -4,7 +4,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 
 const API_KEY = process.env.GEMINI_API_KEY;
-const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
 const COUNT = Math.max(1, Math.min(30,
   Number(process.env.DAILY_ARTICLE_COUNT) || 5
 ));
@@ -23,6 +23,54 @@ const CATEGORIES = [
   "גוף האדם",
   "תעלומות"
 ];
+
+
+async function requestWithRetry(model, options) {
+  const models = [model, model, "gemini-flash-lite-latest"];
+  let last;
+  for (let i=0;i<models.length;i++) {
+    if(i) await new Promise(r=>setTimeout(r, i*10000));
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(models[i])}:generateContent`, {...options,signal:AbortSignal.timeout(180000)});
+      if (![500,502,503,504].includes(response.status) || i===models.length-1) return response;
+      await response.body?.cancel();
+    } catch(e) { last=e; if(i===models.length-1) throw e; }
+  }
+  throw last || new Error("No response");
+}
+async function checkSource(value) {
+  try {
+    const u=new URL(value);
+    if(u.protocol!=="https:" || u.pathname==="/" || !/(^|\.)(nasa\.gov|nih\.gov|noaa\.gov|si\.edu|britannica\.com|nature\.com|science\.org|nationalgeographic\.com|history\.com|wikipedia\.org|edu|gov)$/.test(u.hostname)) return false;
+    const r=await fetch(u,{redirect:"error",signal:AbortSignal.timeout(9000),headers:{"User-Agent":"DidYouKnowEducationalApp/1.0"}});
+    await r.body?.cancel(); return r.ok;
+  } catch {return false;}
+}
+async function findMedia(query) {
+  const result={};
+  for(const type of ["bitmap","video"]) {
+    try {
+      const u=new URL("https://commons.wikimedia.org/w/api.php");
+      u.search=new URLSearchParams({action:"query",generator:"search",gsrsearch:String(query).slice(0,150)+" filetype:"+type,gsrnamespace:"6",gsrlimit:"8",prop:"imageinfo",iiprop:"url|mime|extmetadata|size",iiurlwidth:"1000",format:"json"});
+      const r=await fetch(u,{signal:AbortSignal.timeout(12000),headers:{"User-Agent":"DidYouKnowEducationalApp/1.0"}}); if(!r.ok) continue;
+      const data=await r.json();
+      const pages=Object.values(data.query?.pages||{}).sort((a,b)=>(a.index||0)-(b.index||0));
+      for(const page of pages) {
+        const info=page.imageinfo?.[0], meta=info?.extmetadata||{};
+        const license=meta.LicenseShortName?.value||"";
+        if(!info || !/^(CC BY(?:-SA)? [1-4]\.0|CC0|Public domain)$/i.test(license)) continue;
+        const url=type==="bitmap"?(info.thumburl||info.url):info.url;
+        if(!/^https:\/\/upload\.wikimedia\.org\//.test(url)) continue;
+        if(type==="video" && (!/^video\/(webm|mp4)$/.test(info.mime)||info.size>30000000)) continue;
+        if(type==="bitmap" && !/^image\/(jpeg|png|webp)$/.test(info.mime)) continue;
+        const credit={url:info.descriptionurl,license,author:String(meta.Artist?.value||"").replace(/<[^>]*>/g,"")};
+        if(type==="bitmap") {result.image=url;result.imageCredit=credit;} else {result.video=url;result.videoCredit=credit;}
+        break;
+      }
+    } catch(e) {console.log("Media search unavailable",type);}
+  }
+  return result;
+}
 
 async function main() {
   if (!API_KEY) {
@@ -58,7 +106,7 @@ async function main() {
 You are the editor of DID YOU KNOW?,
 a Hebrew educational discovery app.
 
-Generate exactly ${COUNT} original articles
+Generate exactly ${COUNT} original articles in distinct categories. Prioritize surprising real-world phenomena, space, nature, human stories and counterintuitive discoveries. Avoid generic textbook topics.
 in natural, engaging Hebrew.
 
 Categories:
@@ -71,10 +119,11 @@ Every article must include:
 - category: one of the listed categories
 - title: an intriguing Hebrew headline
 - teaser: 1-2 interesting sentences
-- body: 3-5 substantial paragraphs
+- body: 6-10 substantial paragraphs, 350-650 Hebrew words in total (minimum 350), with concrete examples, historical or scientific context, mechanisms, and nuance
 - fact: an additional interesting fact
 - image: a relevant HTTPS photograph URL
-- sources: 1-3 relevant HTTPS source URLs
+- sources: 2-4 specific relevant HTTPS article URLs, not homepages
+- mediaQuery: a short English search phrase for relevant Wikimedia Commons footage or photographs
 - quiz: a question with three possible answers
 
 Never invent facts, studies, or sources.
@@ -92,6 +141,7 @@ Return only valid JSON in this format:
       "body": [],
       "fact": "",
       "image": "",
+      "mediaQuery": "",
       "sources": [],
       "quiz": {
         "q": "",
@@ -106,8 +156,8 @@ Return only valid JSON in this format:
   console.log("Generating articles:", COUNT);
   console.log("Using model:", MODEL);
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(MODEL)}:generateContent`,
+  const response = await requestWithRetry(
+    MODEL,
     {
       method: "POST",
       headers: {
@@ -165,13 +215,14 @@ Return only valid JSON in this format:
   );
 
   const accepted = [];
+  const usedCategories = new Set();
 
   const isHttps = value =>
     typeof value === "string" &&
     /^https:\/\/\S+$/i.test(value);
 
   for (const article of parsed.articles) {
-    if (!article || !CATEGORIES.includes(article.category)) {
+    if (!article || !CATEGORIES.includes(article.category) || usedCategories.has(article.category)) {
       continue;
     }
 
@@ -181,14 +232,15 @@ Return only valid JSON in this format:
       typeof article.teaser !== "string" ||
       !article.teaser.trim() ||
       !Array.isArray(article.body) ||
-      article.body.length < 3 ||
+      article.body.length < 5 ||
+      article.body.join(" ").trim().split(/\s+/u).length < 350 ||
       !article.body.every(p =>
         typeof p === "string" && p.trim().length >= 70
       ) ||
       typeof article.fact !== "string" ||
-      !isHttps(article.image) ||
+      typeof article.mediaQuery !== "string" || !article.mediaQuery.trim() ||
       !Array.isArray(article.sources) ||
-      !article.sources.length ||
+      article.sources.length < 2 ||
       !article.sources.every(isHttps) ||
       !article.quiz ||
       typeof article.quiz.q !== "string" ||
@@ -218,8 +270,18 @@ Return only valid JSON in this format:
       continue;
     }
 
+    const sources = [];
+    for (const url of article.sources.slice(0,4)) {
+      if (await checkSource(url)) sources.push(url);
+    }
+    if (sources.length < 2) { console.log("Rejected sources:", article.title); continue; }
+    const media = await findMedia(article.mediaQuery);
+    if (!media.image) { console.log("No verified Commons image:", article.title); continue; }
+    usedCategories.add(article.category);
     accepted.push({
       ...article,
+      ...media,
+      sources,
       id,
       date: today
     });
@@ -241,11 +303,12 @@ Return only valid JSON in this format:
   database.version = Number(database.version || 1) + 1;
 
   await fs.writeFile(
-    FILE,
+    FILE + ".tmp",
     JSON.stringify(database, null, 2) + "\n",
     "utf8"
   );
 
+  await fs.rename(FILE + ".tmp", FILE);
   console.log("SUCCESS");
   console.log("New articles:", accepted.length);
   console.log("Total articles:", database.articles.length);
