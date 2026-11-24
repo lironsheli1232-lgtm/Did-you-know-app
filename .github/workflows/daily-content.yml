@@ -17,7 +17,7 @@ concurrency:
 jobs:
   generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -29,18 +29,46 @@ jobs:
       - name: Tests
         run: node --test tests/*.test.js
 
-      - name: Generate articles
+      - name: Generate articles with fallback
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: gemini-3.5-flash-lite
           DAILY_ARTICLE_COUNT: '5'
-        run: node scripts/generate-content.mjs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          log=$(mktemp)
+          trap 'rm -f "$log"' EXIT
+
+          for model in gemini-3.5-flash-lite gemini-flash-lite-latest; do
+            for attempt in 1 2 3; do
+              echo "Model: $model | Attempt: $attempt"
+
+              if GEMINI_MODEL="$model" node scripts/generate-content.mjs >"$log" 2>&1; then
+                cat "$log"
+                exit 0
+              fi
+
+              cat "$log"
+
+              if ! grep -Eqi 'API error: (503|502|504)|UNAVAILABLE' "$log"; then
+                exit 1
+              fi
+
+              if [ "$attempt" -lt 3 ]; then
+                sleep "$((attempt * 30))"
+              fi
+            done
+          done
+
+          exit 1
 
       - name: Save archive
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add content/articles.json
+
           if ! git diff --cached --quiet; then
             git commit -m 'Publish daily articles'
             git push
