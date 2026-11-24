@@ -13,7 +13,9 @@ concurrency:
 jobs:
   generate:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 45
+    outputs:
+      artifact_ready: ${{ steps.ready.outputs.ok }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,6 +24,8 @@ jobs:
       - name: Tests
         run: node --test tests/*.test.js
       - name: Generate articles
+        id: generation
+        continue-on-error: true
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
@@ -39,13 +43,19 @@ jobs:
       - name: Prepare public site
         run: |
           mkdir -p public/content
-          cp index.html icon.svg personalization.js content-loader.js public/
+          cp index.html icon.svg personalization.js content-loader.js manifest.webmanifest ambient.wav public/
           node -e 'const fs=require("fs");const d=JSON.parse(fs.readFileSync("content/articles.json"));delete d.reserve;fs.writeFileSync("public/content/articles.json",JSON.stringify(d));'
       - uses: actions/upload-pages-artifact@v3
         with:
           path: public
+      - id: ready
+        run: echo "ok=true" >> "$GITHUB_OUTPUT"
+      - name: Check daily generation
+        if: steps.generation.outcome == 'failure'
+        run: exit 1
   deploy:
     needs: generate
+    if: ${{ always() && needs.generate.outputs.artifact_ready == 'true' }}
     runs-on: ubuntu-latest
     environment:
       name: github-pages
