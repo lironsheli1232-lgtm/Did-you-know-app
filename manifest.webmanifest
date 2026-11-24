@@ -1,0 +1,1 @@
+{"name": "Did u know?", "short_name": "Did u know?", "start_url": "./", "scope": "./", "display": "standalone", "background_color": "#fff4e5", "theme_color": "#fff3df", "icons": [{"src": "icon.svg", "sizes": "any", "type": "image/svg+xml"}]}
