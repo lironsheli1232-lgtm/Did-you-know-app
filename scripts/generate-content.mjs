@@ -40,9 +40,9 @@ const need=Math.max(0,count-current.filter(a=>a.date===today).length-fresh.lengt
 const released=reserve.slice(0,need).map(a=>({...a,date:today}));
 const result={db:{...generated.db,articles:[...current,...fresh,...released],reserve:reserve.slice(released.length)},added:fresh.length+released.length};
 if(result.added)result.db.updatedAt=today;
-if(result.db.articles.filter(a=>a.date===today).length>=count && result.db.reserve.length<50 && !(geminiUnavailable&&groqUnavailable)){
+if(result.db.articles.filter(a=>a.date===today).length>=count && result.db.reserve.length<25 && !(geminiUnavailable&&groqUnavailable)){
   const all=[...result.db.articles,...result.db.reserve];
-  const extra=await generate({...result.db,articles:all},{today:'reserve-'+today,count:Math.min(5,50-result.db.reserve.length)});
+  const extra=await generate({...result.db,articles:all},{today:'reserve-'+today,count:Math.min(2,25-result.db.reserve.length)});
   const stock=extra.db.articles.slice(all.length);
   if(stock.length){result.db.reserve.push(...stock);result.added+=stock.length;console.log('Reserve:',result.db.reserve.length);}
 }
